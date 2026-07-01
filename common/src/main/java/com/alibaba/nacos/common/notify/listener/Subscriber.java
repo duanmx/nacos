@@ -30,21 +30,21 @@ public abstract class Subscriber<T extends Event> {
     
     /**
      * Event callback.
-     *
+     *【核心】事件回调，收到事件时执行
      * @param event {@link Event}
      */
     public abstract void onEvent(T event);
     
     /**
      * Type of this subscriber's subscription.
-     *
+     *【核心】声明订阅哪种事件
      * @return Class which extends {@link Event}
      */
     public abstract Class<? extends Event> subscribeType();
     
     /**
      * It is up to the listener to determine whether the callback is asynchronous or synchronous.
-     *
+     *回调执行器，null 表示在 Publisher 线程同步执行
      * @return {@link Executor}
      */
     public Executor executor() {
@@ -53,7 +53,7 @@ public abstract class Subscriber<T extends Event> {
     
     /**
      * Whether to ignore expired events.
-     *
+     * 是否忽略过期事件，默认 false
      * @return default value is {@link Boolean#FALSE}
      */
     public boolean ignoreExpireEvent() {
@@ -63,7 +63,7 @@ public abstract class Subscriber<T extends Event> {
     /**
      * Whether the event's scope matches current subscriber. Default implementation is all scopes matched.
      * If you override this method, it better to override related {@link com.alibaba.nacos.common.notify.Event#scope()}.
-     *
+     *作用域匹配，默认 true（匹配所有作用域）
      * @param event {@link Event}
      * @return Whether the event's scope matches current subscriber
      */

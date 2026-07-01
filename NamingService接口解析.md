@@ -254,3 +254,244 @@ naming.deregisterInstance("my-service", "192.168.1.100", 8080);
 // 7. 关闭资源
 naming.shutDown();
 ```
+
+---
+
+## 五、NacosNamingService 初始化深度解析
+
+### 5.1 入口方法
+
+用户通过 `NamingFactory.createNamingService(properties)` 创建实例，最终调用 `NacosNamingService` 构造器：
+
+```java
+// NamingFactory — 反射创建
+public static NamingService createNamingService(Properties properties) throws NacosException {
+    Class<?> driverImplClass = Class.forName("com.alibaba.nacos.client.naming.NacosNamingService");
+    Constructor constructor = driverImplClass.getConstructor(Properties.class);
+    return (NamingService) constructor.newInstance(properties);
+}
+
+// NacosNamingService — 构造器委托 init
+public NacosNamingService(Properties properties) throws NacosException {
+    init(properties);
+}
+```
+
+### 5.2 init() 方法源码（L110-L136）
+
+```java
+private void init(Properties properties) throws NacosException {
+    // ① 异步预加载耗时组件
+    PreInitUtils.asyncPreLoadCostComponent();
+    // ② 派生 NacosClientProperties
+    final NacosClientProperties nacosClientProperties =
+        NacosClientProperties.PROTOTYPE.derive(properties);
+    // ③ 日志 + 参数校验
+    NAMING_LOGGER.info(ClientBasicParamUtil.getInputParameters(...));
+    ValidatorUtils.checkInitParam(nacosClientProperties);
+    // ④ 初始化命名空间、序列化、Web根上下文、日志名
+    this.namespace = InitUtils.initNamespaceForNaming(nacosClientProperties);
+    InitUtils.initSerialization();
+    InitUtils.initWebRootContext(nacosClientProperties);
+    initLogName(nacosClientProperties);
+    // ⑤ 创建事件通知体系（UUID scope + Notifier + Publisher）
+    this.notifierEventScope = UUID.randomUUID().toString();
+    this.changeNotifier = new InstancesChangeNotifier(this.notifierEventScope);
+    NotifyCenter.registerToPublisher(InstancesChangeEvent.class, 16384);
+    NotifyCenter.registerSubscriber(changeNotifier);
+    // ⑥ 创建服务信息缓存持有者（含本地磁盘缓存 + 故障转移）
+    this.serviceInfoHolder =
+        new ServiceInfoHolder(namespace, this.notifierEventScope, nacosClientProperties);
+    // ⑦ 注册模糊监听事件 Publisher + 创建模糊监听持有者
+    NotifyCenter.registerToPublisher(NamingFuzzyWatchNotifyEvent.class, 16384);
+    this.namingFuzzyWatchServiceListHolder =
+        new NamingFuzzyWatchServiceListHolder(this.notifierEventScope);
+    // ⑧ 创建客户端代理委托（核心，内部启动 gRPC/HTTP/安全/服务列表）
+    this.clientProxy = new NamingClientProxyDelegate(this.namespace, serviceInfoHolder,
+        nacosClientProperties, changeNotifier, namingFuzzyWatchServiceListHolder);
+}
+```
+
+### 5.3 逐步分解
+
+| 步骤 | 代码 | 做了什么 |
+|------|------|----------|
+| ① | `PreInitUtils.asyncPreLoadCostComponent()` | 起一个新线程异步预加载 JSON 适配器（`JsonUtils.preload()`）和 RAM 鉴权插件（`SpasAdapter.getAk()`），避免首次调用时的几百毫秒延迟 |
+| ② | `NacosClientProperties.PROTOTYPE.derive(properties)` | 从原型属性派生出一份完整的客户端属性对象，合并 JVM 参数、环境变量、传入 Properties |
+| ③ | `ValidatorUtils.checkInitParam(...)` | 校验必要参数（如 serverAddr 不能为空），不合法则抛 `NacosException` |
+| ④a | `InitUtils.initNamespaceForNaming(...)` | 解析命名空间，优先级：云环境（ANS/ALIWARE）→ JVM `-D` 参数 → Properties → 默认 `public` |
+| ④b | `InitUtils.initSerialization()` | 预加载 Selector 工厂和 JSON 适配器，为后续序列化做准备 |
+| ④c | `InitUtils.initWebRootContext(...)` | 解析 `contextPath`，设置 HTTP 兼容模式的 URL 前缀（`/nacos/v1/ns`） |
+| ④d | `initLogName(...)` | 设置 naming 日志文件名（默认 `naming.log`） |
+| ⑤ | 创建 `InstancesChangeNotifier` + 注册 Publisher/Subscriber | 生成 UUID 作为事件作用域，创建实例变更通知器，向 `NotifyCenter` 注册 `InstancesChangeEvent` 发布器（缓冲区 16384）和通知器订阅者 |
+| ⑥ | `new ServiceInfoHolder(...)` | 创建服务信息缓存持有者：初始化磁盘缓存目录、创建 `ConcurrentHashMap` 服务信息表（可选从磁盘加载）、创建 `FailoverReactor`（故障转移）和 `ServiceInfoDiskCacheRefresher`（磁盘缓存刷新器） |
+| ⑦ | 注册模糊监听事件体系 | 注册 `NamingFuzzyWatchNotifyEvent` 发布器，创建 `NamingFuzzyWatchServiceListHolder` |
+| ⑧ | `new NamingClientProxyDelegate(...)` | **核心步骤**，创建客户端代理委托，内部依次创建 6 个子组件（见 5.4） |
+
+### 5.4 步骤 ⑧ NamingClientProxyDelegate 构造内部展开
+
+```
+NamingClientProxyDelegate 构造器内部：
+  ├─ new ServiceInfoUpdateService(...)     — 定时更新服务实例信息
+  ├─ new NamingServerListManager(...)      — 管理服务端地址列表
+  │    └─ .start()                          — 加载地址列表，校验非空，随机选择初始索引
+  ├─ new SecurityProxy(...)                — 安全代理
+  │    └─ initSecurityProxy(...)            — 立即登录 + 定时刷新登录（ScheduledExecutor）
+  ├─ new NamingHttpClientProxy(...)        — HTTP 兼容代理（旧版协议降级用）
+  └─ new NamingGrpcClientProxy(...)        — gRPC 代理（主通道）
+       ├─ RpcClientFactory.createClient()   — 创建 gRPC 客户端
+       ├─ new NamingGrpcRedoService(...)    — 重做服务（断线重连后自动重注册/重订阅）
+       └─ start(...)
+            ├─ rpcClient.serverListFactory()       — 设置服务端列表工厂
+            ├─ rpcClient.registerConnectionListener(redoService) — 注册连接监听
+            ├─ rpcClient.registerServerRequestHandler(NamingPushRequestHandler) — 注册服务端推送处理器
+            ├─ rpcClient.registerServerRequestHandler(NamingFuzzyWatchNotifyRequestHandler) — 模糊监听推送处理器
+            ├─ rpcClient.start()                   — 启动 gRPC 连接
+            ├─ namingFuzzyWatchServiceListHolder.start() — 启动模糊监听
+            └─ NotifyCenter.registerSubscriber(this) — 订阅服务端列表变更事件
+```
+
+### 5.5 各子组件职责说明
+
+| 组件 | 类名 | 职责 |
+|------|------|------|
+| 服务信息更新服务 | `ServiceInfoUpdateService` | 定时从服务端拉取订阅服务的实例列表，作为推送的补充兜底机制 |
+| 服务端列表管理器 | `NamingServerListManager` | 管理服务端地址列表，支持域名解析、轮询选择、动态更新 |
+| 安全代理 | `SecurityProxy` | 管理鉴权插件（SPI），负责登录获取 accessToken、定时刷新、为请求注入鉴权头 |
+| HTTP 代理 | `NamingHttpClientProxy` | HTTP/REST 协议通道，用于兼容旧版服务端或持久实例操作降级 |
+| gRPC 代理 | `NamingGrpcClientProxy` | gRPC 协议通道（主通道），负责注册/注销/订阅/查询等所有核心操作 |
+| 重做服务 | `NamingGrpcRedoService` | 断线重连后自动重新执行注册和订阅操作，保证最终一致性 |
+| 服务信息缓存 | `ServiceInfoHolder` | 维护本地 `ConcurrentHashMap` 服务实例缓存，支持磁盘持久化和故障转移 |
+| 实例变更通知器 | `InstancesChangeNotifier` | 监听 `InstancesChangeEvent`，将变更分发到已注册的 `EventListener` |
+| 模糊监听持有者 | `NamingFuzzyWatchServiceListHolder` | 管理模糊监听的注册表和 Future，处理模糊监听推送事件 |
+| 事件总线 | `NotifyCenter` | 统一事件发布/订阅中心，负责 `InstancesChangeEvent` 和 `NamingFuzzyWatchNotifyEvent` 的分发 |
+
+### 5.6 初始化时序图
+
+```mermaid
+sequenceDiagram
+    participant User as 用户代码
+    participant Factory as NamingFactory
+    participant NNS as NacosNamingService
+    participant PreInit as PreInitUtils
+    participant InitUtils as InitUtils
+    participant NC as NotifyCenter
+    participant SIH as ServiceInfoHolder
+    participant NFWLH as NamingFuzzyWatchServiceListHolder
+    participant Delegate as NamingClientProxyDelegate
+    participant SLS as NamingServerListManager
+    participant SP as SecurityProxy
+    participant HCP as NamingHttpClientProxy
+    participant GCP as NamingGrpcClientProxy
+    participant RPC as RpcClient
+    participant Redo as NamingGrpcRedoService
+
+    User->>Factory: createNamingService(properties)
+    Factory->>NNS: new NacosNamingService(properties)
+    NNS->>NNS: init(properties)
+
+    Note over NNS: ① 异步预加载
+    NNS->>PreInit: asyncPreLoadCostComponent()
+    PreInit->>PreInit: 新线程: JsonUtils.preload() + SpasAdapter.getAk()
+
+    Note over NNS: ② 派生属性
+    NNS->>NNS: NacosClientProperties.PROTOTYPE.derive(properties)
+
+    Note over NNS: ③ 参数校验
+    NNS->>NNS: ValidatorUtils.checkInitParam(...)
+
+    Note over NNS: ④ 初始化基础环境
+    NNS->>InitUtils: initNamespaceForNaming()
+    InitUtils-->>NNS: namespace (public / 自定义)
+    NNS->>InitUtils: initSerialization()
+    NNS->>InitUtils: initWebRootContext()
+    NNS->>NNS: initLogName()
+
+    Note over NNS: ⑤ 事件通知体系
+    NNS->>NNS: 生成 UUID notifierEventScope
+    NNS->>NNS: new InstancesChangeNotifier(scope)
+    NNS->>NC: registerToPublisher(InstancesChangeEvent, 16384)
+    NNS->>NC: registerSubscriber(changeNotifier)
+
+    Note over NNS: ⑥ 服务信息缓存
+    NNS->>SIH: new ServiceInfoHolder(namespace, scope, props)
+    SIH->>SIH: 初始化 cacheDir
+    SIH->>SIH: isLoadCacheAtStart? → 从磁盘读取缓存
+    SIH->>SIH: new FailoverReactor()
+    SIH->>SIH: new ServiceInfoDiskCacheRefresher()
+
+    Note over NNS: ⑦ 模糊监听体系
+    NNS->>NC: registerToPublisher(NamingFuzzyWatchNotifyEvent, 16384)
+    NNS->>NFWLH: new NamingFuzzyWatchServiceListHolder(scope)
+
+    Note over NNS: ⑧ 创建客户端代理委托（核心）
+    NNS->>Delegate: new NamingClientProxyDelegate(namespace, SIH, props, notifier, NFWLH)
+
+    Delegate->>Delegate: new ServiceInfoUpdateService(props, SIH, this, notifier)
+    Delegate->>SLS: new NamingServerListManager(props, namespace)
+    Delegate->>SLS: start()
+    SLS->>SLS: getServerList() → 校验非空 → 随机初始索引
+
+    Delegate->>SP: new SecurityProxy(serverListManager, restTemplate)
+    SP->>SP: ClientAuthPluginManager.init(serverList, restTemplate)
+    SP->>NC: registerSubscriber(ServerListChangeListener)
+    Delegate->>SP: initSecurityProxy(props)
+    SP->>SP: login(properties) — 立即登录
+    SP->>SP: scheduleWithFixedDelay(login, 定时刷新)
+
+    Delegate->>HCP: new NamingHttpClientProxy(namespace, securityProxy, serverListManager, props)
+
+    Delegate->>GCP: new NamingGrpcClientProxy(namespace, securityProxy, serverListManager, props, SIH, NFWLH)
+    GCP->>GCP: 生成 uuid
+    GCP->>GCP: 创建 labels (source=SDK, module=NAMING)
+    GCP->>NFWLH: registerNamingGrpcClientProxy(this)
+    GCP->>RPC: RpcClientFactory.createClient(uuid, GRPC, config)
+    GCP->>Redo: new NamingGrpcRedoService(this, NFWLH, props)
+    GCP->>GCP: start(serverListFactory, SIH, NFWLH)
+
+    GCP->>RPC: serverListFactory(serverListFactory)
+    GCP->>RPC: registerConnectionListener(redoService)
+    GCP->>RPC: registerServerRequestHandler(NamingPushRequestHandler)
+    GCP->>RPC: registerServerRequestHandler(NamingFuzzyWatchNotifyRequestHandler)
+    GCP->>RPC: start() — 建立 gRPC 连接
+    GCP->>NFWLH: start()
+    GCP->>NC: registerSubscriber(this) — 订阅 ServerListChangeEvent
+
+    Delegate-->>NNS: clientProxy 就绪
+    NNS-->>Factory: NamingService 实例就绪
+    Factory-->>User: 返回 NamingService
+```
+
+### 5.7 四大初始化阶段总结
+
+| 阶段 | 步骤 | 做什么 | 关键产物 |
+|------|------|--------|----------|
+| **环境准备** | ①-④ | 异步预加载 JSON/鉴权组件、派生属性、校验参数、解析命名空间、设置 Web 上下文和日志 | `namespace`、`NacosClientProperties` |
+| **事件体系** | ⑤-⑦ | 创建实例变更通知器和模糊监听体系，注册到 `NotifyCenter` 事件总线 | `InstancesChangeNotifier`、`ServiceInfoHolder`、`NamingFuzzyWatchServiceListHolder` |
+| **通信通道** | ⑧ | 创建 `NamingClientProxyDelegate`，内部启动：服务端列表管理、安全登录、gRPC 主通道 + HTTP 降级通道、断线重做服务 | `NamingGrpcClientProxy`（主）、`NamingHttpClientProxy`（降级）、`SecurityProxy`、`NamingServerListManager`、`NamingGrpcRedoService` |
+| **gRPC 连接** | ⑧内 | 创建 gRPC 客户端，注册连接监听器（断线重做）、注册推送处理器（实例变更推送 + 模糊监听推送），启动连接 | `RpcClient` 已连接服务端 |
+
+### 5.8 init() 初始化后的组件拓扑
+
+```
+                    NacosNamingService
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+    serviceInfoHolder  changeNotifier  clientProxy (NamingClientProxyDelegate)
+          │              │              │
+          │              │         ┌────┼────┬────────────┬──────────────┐
+          │              │         │    │    │            │              │
+    ┌─────┴─────┐   SelectorManager │ │    │            │              │
+    │           │              ┌───┘ │    │            │              │
+ serviceInfoMap  Failover     NC   SLS   SP          HCP            GCP
+ (ConcurrentHashMap) Reactor  │    │    │         (HTTP降级)    ┌────┴────┐
+                               │    │    │                    │         │
+                          ServerList  │  ClientAuth         RpcClient  RedoService
+                          (轮询选择)  │  PluginManager      (gRPC连接)  (断线重做)
+                                     │  (SPI登录)
+                                     └─ scheduleWithFixedDelay
+                                        (定时刷新Token)
+```
+
+> 初始化完成后，`NamingService` 实例即可对外提供注册、注销、查询、订阅等全部服务发现能力。
