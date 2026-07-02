@@ -62,10 +62,47 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * lock grpc client.
+ * Nacos 分布式锁 gRPC 客户端 —— 基于 gRPC 双向流与 Nacos 服务端通信，
+ * 实现分布式锁的获取、释放、续约和服务端推送通知的接收。
+ *
+ * <h2>核心职责</h2>
+ * <p>继承自 {@link AbstractLockClient}，在鉴权 Header 注入基础上，
+ * 提供完整的锁 RPC 能力：</p>
+ * <ul>
+ *   <li><b>锁获取</b>：{@link #lock(LockInstance)} 支持服务端等待队列，
+ *       通过 {@link #waitForNotification} 阻塞等待服务端推送锁可用通知</li>
+ *   <li><b>锁释放</b>：{@link #unLockWithResult(LockInstance)} 返回
+ *       {@link LockResult} 包含剩余重入计数</li>
+ *   <li><b>锁续约</b>：{@link #renewWithResult(LockInstance)} 看门狗心跳</li>
+ *   <li><b>通知机制</b>：通过 {@link #registerServerRequestHandler()} 注册
+ *       服务端推送处理器，将 {@link LockNotificationRequest} 转换为
+ *       {@link CompletableFuture} 的完成信号</li>
+ *   <li><b>排队取消</b>：{@link #cancelWait} 客户端主动取消和服务端排队清除</li>
+ * </ul>
+ *
+ * <h2>通知机制的 TOCTOU 防护</h2>
+ * <pre>{@code
+ *   正确的顺序（register-before-request）：
+ *     registerForNotification(key, owner)   // Step 1: 先注册 CompletableFuture
+ *     → lockWithResult(instance)            // Step 2: 再发请求 → 服务端可能立即推送
+ *       → 如果锁被占用，服务端将客户端加入等待队列
+ *     → waitForNotification(key, owner)     // Step 3: 阻塞等待推送
+ *
+ *   错误的顺序（request-before-register）：
+ *     lockWithResult(instance)              // 服务端在 register 前推送了通知！
+ *     → registerForNotification(key, owner) // 通知已经丢失，永远等不到
+ * }</pre>
+ *
+ * <h2>能力协商</h2>
+ * <p>每次锁操作前检查 {@code isAbilitySupportedByServer()}，
+ * 确认服务端支持 {@link AbilityKey#SERVER_DISTRIBUTED_LOCK} 功能。
+ * 旧版服务端返回 SERVER_NOT_IMPLEMENTED 错误。</p>
+ *
+ * <h2>关闭流程</h2>
+ * <p>关闭时先完成所有 pending 的 notificationFutures（避免线程泄漏），
+ * 再关闭底层 gRPC RpcClient。</p>
  *
  * @author 985492783@qq.com
- * @description LockGrpcClient
  * @date 2023/6/28 17:35
  */
 public class LockGrpcClient extends AbstractLockClient {

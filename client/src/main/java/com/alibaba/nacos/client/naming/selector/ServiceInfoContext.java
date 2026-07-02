@@ -23,12 +23,23 @@ import com.alibaba.nacos.api.naming.selector.NamingContext;
 import java.util.List;
 
 /**
- * Service info context.
+ * ServiceInfo 上下文适配器 —— 将 ServiceInfo 适配为 NamingContext 接口。
+ *
+ * <h2>核心职责</h2>
+ * <p>将客户端缓存的 ServiceInfo 对象包装为 NamingSelector 所需的 NamingContext，
+ * 使 NamingSelector 可以基于 serviceName、groupName、clusters、instances 等信息进行选择。</p>
+ *
+ * <h2>使用场景</h2>
+ * <p>当用户调用 getAllInstances/selectInstances 等方法时，客户端从 ServiceInfoHolder
+ * 获取 ServiceInfo 后，通过 ServiceInfoContext 适配为 NamingContext，再交给 selector 过滤。</p>
  *
  * @author xiweng.yy
  */
 public class ServiceInfoContext implements NamingContext {
     
+    /**
+     * 服务端下发的服务信息快照。
+     */
     private final ServiceInfo serviceInfo;
     
     public ServiceInfoContext(ServiceInfo serviceInfo) {

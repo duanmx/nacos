@@ -34,7 +34,36 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Nacos AI module mcp server change notifier.
+ * Nacos AI 模块变更通知器 —— 事件分发中心，负责将服务端推送的 AI 资源变更事件
+ * 路由到对应的用户监听器（Listener）。
+ *
+ * <h2>核心职责</h2>
+ * <p>实现 {@link SmartSubscriber}，订阅五种 AI 资源变更事件：
+ * {@link McpServerChangedEvent}、{@link AgentCardChangedEvent}、
+ * {@link PromptChangedEvent}、{@link AgentSpecChangedEvent}、
+ * {@link SkillChangedEvent}。</p>
+ *
+ * <p>每种事件类型维护一个独立的 {@code ConcurrentHashMap<String, Set<ListenerInvoker>>}
+ * 映射表，key 为 {@link CacheKeyUtils} 生成的缓存键，value 为该资源的所有监听器集合。
+ * 当收到变更事件时，根据 key 查找对应的监听器集合并逐一调用 {@code invoke()}。</p>
+ *
+ * <h2>与 Naming 模块对比</h2>
+ * <p>与 {@link com.alibaba.nacos.client.naming.event.InstancesChangeNotifier} 的角色类似：
+ * 都是 NotifyCenter 事件的二级分发器，负责将粗粒度的事件（"某个资源变了"）
+ * 精准路由到订阅了该资源的监听器（"关注这个资源变化的用户回调"）。</p>
+ *
+ * <h2>注册/注销流程</h2>
+ * <pre>{@code
+ *   NacosAiService.subscribePrompt()
+ *     → aiChangeNotifier.registerListener(promptKey, version, label, listenerInvoker)
+ *       → promptListenerInvokers[CacheKey ] += listenerInvoker
+ *
+ *   GPRC 推送 → NotifyCenter.publishEvent(PromptChangedEvent)
+ *     → AiChangeNotifier.onEvent(PromptChangedEvent)
+ *       → 根据 cacheKey 查找 promptListenerInvokers
+ *         → 逐个调用 listenerInvoker.invoke(event)
+ *           → AbstractNacosPromptListener.onPromptChanged(prompt)
+ * }</pre>
  *
  * @author xiweng.yy
  */

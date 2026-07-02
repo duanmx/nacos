@@ -17,12 +17,21 @@
 package com.alibaba.nacos.client.lock.exception;
 
 /**
- * Exception thrown by Nacos distributed lock operations.
+ * Nacos 分布式锁操作异常 —— 在加锁、释放锁或续约过程中发生错误时抛出。
  *
- * <p>This exception indicates a failure in lock acquisition, release,
- * or other lock-related operations. It extends {@link RuntimeException}
- * to comply with the JUC {@link java.util.concurrent.locks.Lock} interface
- * contract which does not allow checked exceptions.
+ * <h2>设计考量</h2>
+ * <p>继承 {@link RuntimeException} 而非受检异常，原因：JUC
+ * {@link java.util.concurrent.locks.Lock} 接口的方法签名
+ * （如 {@code lock()}、{@code unlock()}）不声明任何受检异常。
+ * 为了在 {@link NacosLock} 中直接抛出而不破坏 JUC 接口契约，
+ * 必须使用运行时异常包装底层错误。</p>
+ *
+ * <p>典型触发场景：</p>
+ * <ul>
+ *   <li>{@link NacosLock#lock()} 被中断时包装 InterruptedException</li>
+ *   <li>{@link com.alibaba.nacos.client.lock.remote.grpc.LockGrpcClient}
+ *       的 gRPC 调用失败时包装 NacosException</li>
+ * </ul>
  *
  * @author DHX
  * @date 2026/05/31

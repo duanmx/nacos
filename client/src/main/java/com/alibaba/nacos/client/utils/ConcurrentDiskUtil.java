@@ -31,7 +31,22 @@ import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 
 /**
- * Concurrent Disk util.
+ * 并发磁盘 I/O 工具类 —— 基于 Java NIO {@link FileChannel} 和
+ * {@link FileLock} 实现线程安全、进程安全的文件读写操作。
+ *
+ * <h2>核心特性</h2>
+ * <ul>
+ *   <li><b>文件锁（FileLock）</b>：通过 {@code tryLock()} 获取排他锁/共享锁，
+ *       防止并发写冲突。锁获取失败时最多重试 10 次（递增退避）</li>
+ *   <li><b>NIO 缓冲</b>：使用 {@link ByteBuffer} 和 {@link FileChannel}
+ *       实现高效字节级读写</li>
+ *   <li><b>原子写入</b>：写入后调用 {@code channel.truncate()} 确保
+ *       文件长度与内容一致（防止旧内容残留）</li>
+ * </ul>
+ *
+ * <h2>使用场景</h2>
+ * <p>主要用于 {@link com.alibaba.nacos.client.naming.cache.DiskCache}
+ * 的磁盘缓存文件读写，确保多线程/多进程环境下服务列表缓存的完整性。</p>
  *
  * @author nkorange
  */

@@ -31,19 +31,40 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
- * Selectors factory.
+ * 命名选择器工厂 —— 创建各种内置 NamingSelector 实例的静态工厂类。
+ *
+ * <h2>核心职责</h2>
+ * <p>提供常用的实例选择器创建方法，避免用户手动构造 Predicate：</p>
+ * <ul>
+ *   <li><b>EMPTY_SELECTOR</b> —— 空选择器，返回全部实例</li>
+ *   <li><b>HEALTHY_SELECTOR</b> —— 健康实例选择器，只返回 isHealthy=true 的实例</li>
+ *   <li><b>newClusterSelector(clusters)</b> —— 按集群筛选，匹配指定的 cluster 名称</li>
+ *   <li><b>newIpSelector(regex)</b> —— 按 IP 正则筛选</li>
+ *   <li><b>newMetadataSelector(metadata, isAny)</b> —— 按元数据筛选，
+ *       isAny=false 时所有条件必须满足（AND），isAny=true 时满足任一条件即可（OR）</li>
+ * </ul>
+ *
+ * <h2>使用方</h2>
+ * <p>NamingSelectorWrapper 在注册事件监听器时调用这些工厂方法创建 selector，
+ * 用户也可以通过 NamingSelector 接口自定义选择器实现。</p>
  *
  * @author lideyou
  */
 public final class NamingSelectorFactory {
     
+    /**
+     * 空选择器 —— 不做任何过滤，返回所有实例。
+     */
     public static final NamingSelector EMPTY_SELECTOR = context -> context::getInstances;
     
+    /**
+     * 健康实例选择器 —— 只保留 isHealthy=true 的实例。
+     */
     public static final NamingSelector HEALTHY_SELECTOR =
         new DefaultNamingSelector(Instance::isHealthy);
     
     /**
-     * Cluster selector.
+     * 集群选择器 —— 按 cluster 名称筛选实例，内部记录 clusterString 用于 equals/hashCode 去重。
      */
     private static class ClusterSelector extends DefaultNamingSelector {
         

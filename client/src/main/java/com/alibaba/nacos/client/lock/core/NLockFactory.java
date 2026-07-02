@@ -17,7 +17,9 @@
 package com.alibaba.nacos.client.lock.core;
 
 /**
- * NLock factory.
+ * {@link NLock} 的静态工厂类 —— 提供便捷的锁实体创建方法。
+ *
+ * <p>封装了 NLock 的两种构造方式：无过期时间（永不过期）和指定过期时间戳。</p>
  *
  * @author 985492783@qq.com
  * @date 2023/8/27 15:23
@@ -25,20 +27,21 @@ package com.alibaba.nacos.client.lock.core;
 public class NLockFactory {
     
     /**
-     * create NLock without expireTime.
+     * 创建一个永不过期的 Nacos 锁实体。
      *
-     * @param key key
-     * @return NLock
+     * @param key 锁标识（业务唯一键）
+     * @return NLock 实例，过期时间为 -1（永不过期）
      */
     public static NLock getLock(String key) {
         return new NLock(key, -1L);
     }
     
     /**
-     * create NLock with expireTime.
+     * 创建一个指定过期时间的 Nacos 锁实体。
      *
-     * @param key key
-     * @return NLock
+     * @param key 锁标识（业务唯一键）
+     * @param expireTimestamp 过期时间戳（毫秒）
+     * @return NLock 实例
      */
     public static NLock getLock(String key, Long expireTimestamp) {
         return new NLock(key, expireTimestamp);

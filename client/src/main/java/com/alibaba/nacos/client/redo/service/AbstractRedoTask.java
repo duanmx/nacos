@@ -21,14 +21,34 @@ import com.alibaba.nacos.common.task.AbstractExecuteTask;
 import org.slf4j.Logger;
 
 /**
- * Nacos client abstract redo task.
+ * 抽象重做任务 —— 定时执行的"重放未完成操作"任务基类。
  *
+ * <h2>核心职责</h2>
+ * <p>由 AbstractRedoService 的定时线程池周期性执行：
+ * <ol>
+ *   <li>检查 gRPC 连接状态 —— 未连接则跳过（等待下次调度）</li>
+ *   <li>调用 redoData() —— 子类实现具体的重做逻辑（遍历 findRedoData 结果并重新 RPC）</li>
+ *   <li>异常安全 —— catch 所有异常保证定时任务不因单次失败而停止</li>
+ * </ol>
+ * </p>
+ *
+ * <h2>典型子类</h2>
+ * <ul>
+ *   <li>RedoScheduledTask（Naming）—— 遍历 Instance/BatchInstance/Subscriber RedoData</li>
+ *   <li>ConfigRedoScheduledTask（Config）—— 遍历 ConfigRedoData</li>
+ *   <li>AiRedoScheduledTask（AI）—— 遍历 AgentEndpoint/McpServerEndpoint RedoData</li>
+ * </ul>
+ *
+ * @param <S> RedoService 类型
  * @author xiweng.yy
  */
 public abstract class AbstractRedoTask<S extends AbstractRedoService> extends AbstractExecuteTask {
     
     private final Logger logger;
     
+    /**
+     * 关联的 RedoService —— 提供 findRedoData() 等查询方法。
+     */
     private final S redoService;
     
     public AbstractRedoTask(Logger logger, S redoService) {

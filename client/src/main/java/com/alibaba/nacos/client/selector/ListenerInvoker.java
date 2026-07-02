@@ -17,24 +17,40 @@
 package com.alibaba.nacos.client.selector;
 
 /**
- * Listener invoker.
+ * 监听器调用器接口 —— 封装用户回调的调用逻辑。
  *
- * @param <E> the type of event received by the listener
+ * <h2>核心职责</h2>
+ * <p>将具体模块（Naming/Config/AI）的 EventListener 调用逻辑抽象为统一接口：
+ * <ul>
+ *   <li><b>invoke(event)</b> —— 调用用户的回调方法（支持同步/异步）</li>
+ *   <li><b>isInvoked()</b> —— 判断是否已至少调用过一次，
+ *       用于首次订阅时只做初始通知、后续增量跳过的去重逻辑</li>
+ * </ul>
+ * </p>
+ *
+ * <h2>典型实现</h2>
+ * <ul>
+ *   <li>NamingListenerInvoker —— 封装 EventListener，支持
+ *       AbstractEventListener.getExecutor() 异步执行</li>
+ * </ul>
+ *
+ * @param <E> 回调事件类型
  * @author lideyou
  */
 public interface ListenerInvoker<E> {
     
     /**
-     * Invoke inner listener.
+     * 调用内部 listener。
      *
-     * @param event event
+     * @param event 事件对象
      */
     void invoke(E event);
     
     /**
-     * Mark the listener whether invoked once. It should return {@code true} after {@link #invoke(E)} called at lease once.
+     * 标记该 listener 是否已至少被调用一次。
+     * 一旦 invoke() 被调用过一次，此后应始终返回 true。
      *
-     * @return {@code true} if this listener has invoked at least once, {@code false} otherwise
+     * @return true 表示已至少调用过一次
      */
     boolean isInvoked();
 }

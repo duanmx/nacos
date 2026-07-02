@@ -17,14 +17,25 @@
 package com.alibaba.nacos.client.naming.utils;
 
 /**
- * Pair.
+ * 元素-权重对 —— 用于 Chooser 加权随机选择算法的输入数据单元。
  *
+ * <h2>核心职责</h2>
+ * <p>将元素与其权重绑定为一个不可变数据对，由 {@link Chooser} 消费。
+ * weight 值越大，randomWithWeight() 中被选中的概率越高。</p>
+ *
+ * @param <T> 元素类型
  * @author nkorange
  */
 public class Pair<T> {
     
+    /**
+     * 元素本身。
+     */
     private final T item;
     
+    /**
+     * 权重 —— weight=0 的元素会被 Chooser.Ref.refresh() 忽略。
+     */
     private final double weight;
     
     public Pair(T item, double weight) {

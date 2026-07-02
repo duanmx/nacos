@@ -19,24 +19,50 @@ package com.alibaba.nacos.client.naming.event;
 import com.alibaba.nacos.common.notify.Event;
 
 /**
- * Event class for fuzzy listen notifications.
+ * 模糊监听超限事件 —— 当服务端返回通配符超限错误时通知用户。
  *
- * <p>This class represents an event used for notifying fuzzy listen changes. It extends {@link Event}, indicating
- * that it may be processed asynchronously. The event contains information about the group, dataId, type, and UUID of
- * the notification.
+ * <h2>触发场景</h2>
+ * <p>当模糊订阅同步（executeNamingFuzzyWatch）向服务端发送 RPC 请求时，
+ * 如果服务端返回以下错误码，则发布此事件：
+ * <ul>
+ *   <li><b>FUZZY_WATCH_PATTERN_OVER_LIMIT</b> —— 通配符模式数量超过服务端限制</li>
+ *   <li><b>FUZZY_WATCH_PATTERN_MATCH_COUNT_OVER_LIMIT</b> —— 某个模式匹配的服务数量超过限制</li>
+ * </ul>
+ * </p>
+ *
+ * <h2>消费流程</h2>
+ * <pre>{@code
+ *   NamingFuzzyWatchServiceListHolder.doExecuteNamingFuzzyWatch()
+ *     → 捕获 NacosException（超限错误码）
+ *       → NamingFuzzyWatchLoadEvent.buildEvent()
+ *         → NotifyCenter.publishEvent()
+ *           → NamingFuzzyWatchServiceListHolder.onEvent()
+ *             → context.notifyOverLimitWatchers(code)
+ *               → 遍历所有实现 FuzzyWatchLoadWatcher 的 watcher
+ *                 → onPatternOverLimit() / onServiceReachUpLimit()
+ * }</pre>
+ *
+ * <h2>限流</h2>
+ * <p>notifyOverLimitWatchers() 内部有 60s 抑制期（patternLimitSuppressed），
+ * 避免超限错误高频触发导致日志/通知轰炸。</p>
  *
  * @author shiyiyue
- * @date 2025/01/13
  */
 public class NamingFuzzyWatchLoadEvent extends Event {
     
+    /**
+     * 事件作用域，用于 scope 过滤。
+     */
     private String eventScope;
     
     /**
-     * The groupKeyPattern of configuration.
+     * 触发超限的通配符模式。
      */
     private String groupKeyPattern;
     
+    /**
+     * 错误码：FUZZY_WATCH_PATTERN_OVER_LIMIT 或 FUZZY_WATCH_PATTERN_MATCH_COUNT_OVER_LIMIT。
+     */
     private int code;
     
     /**

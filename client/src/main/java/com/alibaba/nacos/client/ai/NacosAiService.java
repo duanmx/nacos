@@ -77,7 +77,55 @@ import java.util.Properties;
 import java.util.Set;
 
 /**
- * Nacos AI client service implementation.
+ * Nacos AI 服务客户端 —— AI 注册中心（AI Registry）的 SDK 主入口。
+ *
+ * <h2>核心定位</h2>
+ * <p>NacosAiService 是 Nacos AI 模块的"一站式"客户端，统一管理五大 AI 资源
+ * 类型的发布、查询和订阅：</p>
+ * <ul>
+ *   <li><b>MCP Server</b> — Model Context Protocol 服务器的注册与发现</li>
+ *   <li><b>Agent Card</b> — A2A Agent 的能力描述卡片（注册、端点管理、查询）</li>
+ *   <li><b>Prompt</b> — AI Prompt 模板的查询与订阅</li>
+ *   <li><b>AgentSpec</b> — Agent 行为规范的加载与订阅</li>
+ *   <li><b>Skill</b> — AI Skill 文件的下载与订阅</li>
+ * </ul>
+ *
+ * <h2>架构设计</h2>
+ * <pre>{@code
+ *   NacosAiService（门面）
+ *     ├── AiGrpcClient（gRPC 代理，默认传输模式）
+ *     │     ├── RpcClient（底层 gRPC 连接）
+ *     │     ├── AiGrpcRedoService（断线重做）
+ *     │     └── SecurityProxy（鉴权）
+ *     ├── AiHttpClientProxy（HTTP 代理，可选传输模式）
+ *     │     ├── NacosRestTemplate（HTTP 通信）
+ *     │     └── SecurityProxy
+ *     ├── 五大 CacheHolder（本地缓存 + 定时同步）
+ *     │     ├── NacosMcpServerCacheHolder
+ *     │     ├── NacosAgentCardCacheHolder
+ *     │     ├── NacosPromptCacheHolder
+ *     │     ├── NacosAgentSpecCacheHolder
+ *     │     └── NacosSkillCacheHolder
+ *     └── AiChangeNotifier（事件分发 → 用户 Listener 回调）
+ *           ├── McpServerListenerInvoker
+ *           ├── AgentCardListenerInvoker
+ *           ├── PromptListenerInvoker
+ *           ├── AgentSpecListenerInvoker
+ *           └── SkillListenerInvoker
+ * }</pre>
+ *
+ * <h2>传输模式选择</h2>
+ * <p>通过 {@code AI_TRANSPORT_MODE} 属性控制：默认 gRPC（高效双向流），
+ * 也可切换为 HTTP（用于网关代理场景）。Prompt/AgentSpec/Skill 的查询操作
+ * 通过 {@link AiClientProxy} 接口统一抽象，两种传输模式均可使用。</p>
+ *
+ * <h2>数据流转（以 subscribeMcpServer 为例）</h2>
+ * <ol>
+ *   <li>创建 McpServerListenerInvoker 包装用户 Listener</li>
+ *   <li>注册到 AiChangeNotifier（事件分发中心）</li>
+ *   <li>调用 AiGrpcClient.subscribeMcpServer() — 查询当前版本 + 注册到缓存定时更新</li>
+ *   <li>首次返回当前数据，后续变更通过 NotifyCenter 事件异步推送</li>
+ * </ol>
  *
  * @author xiweng.yy
  */

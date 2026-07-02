@@ -22,14 +22,44 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Chooser.
+ * 加权随机选择器 —— 根据元素权重进行随机选择。
  *
+ * <h2>核心职责</h2>
+ * <p>维护一个元素列表及其对应的权重，提供以下能力：</p>
+ * <ul>
+ *   <li><b>randomWithWeight()</b> —— 按权重随机选择一个元素（使用累积权重数组 + 二分查找）</li>
+ *   <li><b>refresh()</b> —— 更新元素列表（写时复制，保证并发安全）</li>
+ *   <li><b>poller</b> —— 通过内置的 GenericPoller 实现 Round-Robin 轮询（权重新计算后不丢失轮询状态）</li>
+ * </ul>
+ *
+ * <h2>算法原理</h2>
+ * <p>Ref.refresh() 将权重归一化为 [0, 1] 的累积概率数组：
+ * <pre>{@code
+ *   元素: [A(w=2), B(w=3), C(w=5)]  → 总权重 = 10
+ *   累积: [0.2, 0.5, 1.0]
+ *   随机: Math.random() = 0.35 → binarySearch → B
+ * }</pre>
+ * randomWithWeight() 生成 [0, 1) 随机数，二分查找确定落入哪个区间。</p>
+ *
+ * <h2>使用场景</h2>
+ * <p>被 {@link com.alibaba.nacos.client.naming.core.Balancer} 使用，
+ * 为每个服务维护一个 Chooser，实现按权重随机选择实例的负载均衡。</p>
+ *
+ * @param <K> key 类型
+ * @param <T> 元素类型
  * @author alibaba
  */
 public class Chooser<K, T> {
     
+    /**
+     * 唯一标识 —— 通常为 serviceKey（如 "DEFAULT_GROUP@@my-service"），
+     * 用于 Balancer 中的 chooserMap 索引。
+     */
     private final K uniqueKey;
     
+    /**
+     * volatile 引用 —— 写时复制保证并发可见性，refresh 时替换整个 Ref。
+     */
     private volatile Ref<T> ref;
     
     public Chooser(K uniqueKey) {

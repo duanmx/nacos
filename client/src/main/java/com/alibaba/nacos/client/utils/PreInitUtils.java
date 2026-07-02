@@ -21,12 +21,19 @@ import com.alibaba.nacos.client.auth.ram.utils.SpasAdapter;
 import com.alibaba.nacos.common.json.JsonAdapterLogUtils;
 
 /**
- * Async do pre init to load some cost component.
+ * 预初始化工具类 —— 在后台线程中异步加载耗时组件，减少客户端首次调用的延迟。
  *
+ * <h2>预加载的组件</h2>
  * <ul>
- *     <li>JsonUtils</li>
- *     <li>SpasAdapter</li>
+ *   <li><b>JsonUtils</b>：JSON 序列化适配器的首次初始化可能耗时数百毫秒，
+ *       提前触发预加载避免首次 API 调用卡顿</li>
+ *   <li><b>SpasAdapter</b>：RAM 鉴权插件在缺少显式配置时需从环境变量/系统属性
+ *       获取 AK/SK，提前触发避免首次登录超时</li>
  * </ul>
+ *
+ * <h2>调用方式</h2>
+ * <p>在客户端服务初始化完成后，通过 {@link #asyncPreLoadCostComponent()}
+ * 启动一个后台守护线程执行预加载。由于是异步的，不影响主流程返回。</p>
  *
  * @author xiweng.yy
  */

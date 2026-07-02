@@ -24,7 +24,18 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * All parameter validation tools.
+ * 参数校验工具类 —— 提供客户端初始化参数和运行时参数的合法性校验。
+ *
+ * <h2>校验项</h2>
+ * <ul>
+ *   <li><b>contextPath</b>：不允许包含连续斜杠（如 {@code //}），
+ *       防止 URL 路径注入攻击</li>
+ * </ul>
+ *
+ * <h2>调用方</h2>
+ * <p>{@link #checkInitParam(NacosClientProperties)} 在客户端服务初始化时
+ * （NacosConfigService / NacosNamingService / NacosAiService）被调用，
+ * 校验用户传入的 Properties 是否合法。</p>
  *
  * @author <a href="mailto:liaochuntao@live.com">liaochuntao</a>
  */

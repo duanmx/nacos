@@ -25,13 +25,44 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Selector Manager.
+ * 选择器管理器 —— 维护订阅 ID → SelectorWrapper 集合的映射。
  *
- * @param <S> the type of selector wrapper
+ * <h2>核心职责</h2>
+ * <p>作为 SelectorWrapper（绑定 selector + listener）的注册表：
+ * <ul>
+ *   <li><b>subId 粒度</b> —— 以订阅 ID（serviceKey）为维度组织 SelectorWrapper 集合，
+ *       一个服务可以被多个 selector + listener 组合订阅</li>
+ *   <li><b>addSelectorWrapper</b> —— 注册 selector（NacosNamingService.subscribe() 时调用）</li>
+ *   <li><b>removeSelectorWrapper</b> —— 移除 selector（NacosNamingService.unsubscribe() 时调用）</li>
+ *   <li><b>getSelectorWrappers</b> —— 批量获取（InstancesChangeNotifier.onEvent() 中获取所有相关 wrapper
+ *       逐一调用 notifyListener 分发事件）</li>
+ * </ul>
+ * </p>
+ *
+ * <h2>使用场景</h2>
+ * <pre>{@code
+ *   // 注册
+ *   selectorManager.addSelectorWrapper("DEFAULT_GROUP@@my-service", wrapper);
+ *
+ *   // 事件分发
+ *   InstancesChangeNotifier.onEvent(InstancesChangeEvent event)
+ *     → Set<NamingSelectorWrapper> wrappers = selectorManager.getSelectorWrappers(subId);
+ *       → for each wrapper: wrapper.notifyListener(event);
+ * </pre>
+ *
+ * <h2>线程安全</h2>
+ * <p>selectorMap 使用 ConcurrentHashMap，内部 Set 使用 ConcurrentHashSet，
+ * 保证多线程环境下的 add/remove/get 操作安全。</p>
+ *
+ * @param <S> SelectorWrapper 子类型（如 NamingSelectorWrapper）
  * @author lideyou
  */
 public class SelectorManager<S extends AbstractSelectorWrapper<?, ?, ?>> {
     
+    /**
+     * 订阅 ID → SelectorWrapper 集合映射。
+     * <p>key = subId（如 "DEFAULT_GROUP@@my-service"），value = 该服务上注册的所有 selector+listener 组合。</p>
+     */
     Map<String, Set<S>> selectorMap = new ConcurrentHashMap<>();
     
     /**

@@ -31,7 +31,23 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Watchdog for automatically renewing distributed lock leases.
+ * Nacos 分布式锁看门狗 —— 自动定期续约锁的租约时间，防止锁因客户端宕机
+ * 或网络断开而过期释放。
+ *
+ * <h2>工作原理</h2>
+ * <p>当 {@link NacosLock#lock()} 首次获取锁成功（reentrantCount == 1）时，
+ * {@link NacosLock} 调用 {@link #register(String, LockGrpcClient, LockInstance)}
+ * 注册到看门狗。看门狗以固定间隔（默认 10s）向服务端发送续约请求。
+ * 当锁释放或续约失败时，调用 {@link #unregister(String)} 取消续约。</p>
+ *
+ * <h2>续约间隔计算</h2>
+ * <p>为避免过于频繁的续约请求，间隔取
+ * {@code max(1s, min(ttl/3, renewIntervalMs))}。其中 TTL 来自
+ * 锁实例的 expiredTime 或默认为 {@code renewIntervalMs * 3}（30s）。</p>
+ *
+ * <h2>线程模型</h2>
+ * <p>使用 2 线程的 ScheduledExecutorService，所有续约任务以
+ * {@code scheduleWithFixedDelay} 方式调度。续约失败自动 unregister。</p>
  *
  * @author DHX
  * @date 2026/05/29

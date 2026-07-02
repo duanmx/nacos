@@ -67,7 +67,54 @@ import static com.alibaba.nacos.client.naming.selector.NamingSelectorFactory.get
 import static com.alibaba.nacos.client.utils.LogUtils.NAMING_LOGGER;
 
 /**
- * Nacos Naming Service.
+ * Nacos 命名服务客户端 —— Naming 模块对外暴露的核心 API 实现。
+ *
+ * <h2>核心职责</h2>
+ * <p>实现 NamingService 接口，为用户提供完整的服务发现与注册能力：
+ * <ul>
+ *   <li><b>服务注册/注销</b> —— registerInstance / deregisterInstance / batchRegisterInstance</li>
+ *   <li><b>实例查询</b> —— getAllInstances / selectInstances / selectOneHealthyInstance</li>
+ *   <li><b>订阅/退订</b> —— subscribe / unsubscribe（支持 NamingSelector 过滤）</li>
+ *   <li><b>模糊监听</b> —— fuzzyWatch / cancelFuzzyWatch / fuzzyWatchWithServiceKeys</li>
+ *   <li><b>运维查询</b> —— getServicesOfServer / getSubscribeServices / getServerStatus</li>
+ * </ul>
+ * 所有操作最终委托给 {@link NamingClientProxyDelegate} 执行。</p>
+ *
+ * <h2>初始化流程（init）</h2>
+ * <pre>{@code
+ *   1. PreInitUtils.asyncPreLoadCostComponent() —— 异步预加载耗性能组件
+ *   2. 生成 notifierEventScope（UUID）—— 事件隔离的唯一标识
+ *   3. 创建 InstancesChangeNotifier + 注册到 NotifyCenter —— 事件 → listener 的路由枢纽
+ *   4. 创建 ServiceInfoHolder —— 实例缓存的中央仓库
+ *       ├─ FailoverReactor（每5s轮询故障转移开关）
+ *       └─ ServiceInfoDiskCacheRefresher（每100ms异步刷盘）
+ *   5. 创建 NamingFuzzyWatchServiceListHolder —— 模糊监听管理器
+ *   6. 创建 NamingClientProxyDelegate —— 统一的通信代理
+ *       ├─ ServiceInfoUpdateService（定时拉取兜底）
+ *       ├─ NamingServerListManager（服务端地址管理）
+ *       ├─ SecurityProxy（鉴权）
+ *       ├─ NamingHttpClientProxy（HTTP 通信，兼容 Nacos 1.x）
+ *       └─ NamingGrpcClientProxy（gRPC 通信，主力通道）
+ * }</pre>
+ *
+ * <h2>数据流转（查询实例为例）</h2>
+ * <pre>{@code
+ *   getAllInstances / selectInstances
+ *     → getServiceInfo(serviceName, groupName, clusters, subscribe)
+ *       ├─ failover 开启？→ getFailoverServiceInfo()（读磁盘数据）
+ *       └─ failover 关闭？
+ *           ├─ subscribe=true？
+ *           │   → serviceInfoHolder.getServiceInfo()（查内存缓存）
+ *           │   → tryToSubscribe()（确保订阅已建立）
+ *           │   → doSelectInstance()（按 cluster 过滤）
+ *           └─ subscribe=false？
+ *               → clientProxy.queryInstancesOfService()（直接查服务端）
+ * }</pre>
+ *
+ * <h2>事件机制</h2>
+ * <p>注册是 fire-and-forget（只发 RPC，不发布本地事件），
+ * 实例变更事件由服务端通过 gRPC 双向流推送至
+ * NamingPushRequestHandler → ServiceInfoHolder.processServiceInfo() → NotifyCenter → EventListener。</p>
  *
  * @author nkorange
  */
@@ -80,21 +127,36 @@ public class NacosNamingService implements NamingService {
     private static final String DOWN = "DOWN";
     
     /**
-     * Each Naming service should have different namespace.
+     * 命名空间 —— 用于多租户隔离，默认 "public"。
      */
     private String namespace;
     
     @Deprecated
     private String logName;
     
+    /**
+     * 服务实例缓存中心 —— 所有实例数据的统一入口，由 processServiceInfo() 统一更新。
+     */
     private ServiceInfoHolder serviceInfoHolder;
     
+    /**
+     * 模糊监听管理器 —— 管理所有通配符 pattern 的订阅上下文。
+     */
     private NamingFuzzyWatchServiceListHolder namingFuzzyWatchServiceListHolder;
     
+    /**
+     * 实例变更通知器 —— 订阅 InstancesChangeEvent，路由到对应的 SelectorWrapper → EventListener。
+     */
     private InstancesChangeNotifier changeNotifier;
     
+    /**
+     * 通信代理 —— 封装 HTTP + gRPC 双通道的底层通信逻辑。
+     */
     private NamingClientProxy clientProxy;
     
+    /**
+     * 事件隔离 scope（UUID）—— 防止多个 NamingService 实例的事件互相干扰。
+     */
     private String notifierEventScope;
     
     public NacosNamingService(String serverList) throws NacosException {

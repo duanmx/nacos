@@ -22,7 +22,27 @@ import com.alibaba.nacos.common.notify.Event;
 import java.util.List;
 
 /**
- * Instances change event.
+ * 实例变更事件 —— 当服务实例列表发生变化时由 ServiceInfoHolder 发布。
+ *
+ * <p>这是命名客户端事件体系中的核心事件。当服务端推送新的 ServiceInfo 或定时查询
+ * 发现实例列表有变化时，通过 {@link InstancesChangeNotifier} 分发给所有注册的
+ * {@link com.alibaba.nacos.api.naming.listener.EventListener}。</p>
+ *
+ * <h2>事件产生路径</h2>
+ * <ol>
+ *   <li>服务端推送：NamingPushRequestHandler → ServiceInfoHolder.processServiceInfo()
+ *       → InstancesDiffer.doDiff() → 有 diff → 发布本事件</li>
+ *   <li>定时轮询：ServiceInfoUpdateService → ServiceInfoHolder.processServiceInfo()
+ *       → InstancesDiffer.doDiff() → 有 diff → 发布本事件</li>
+ *   <li>订阅拉取：NamingClientProxyDelegate.subscribe() → processServiceInfo()
+ *       → 同上</li>
+ *   <li>故障转移：FailoverReactor 切换时也发布此事件</li>
+ * </ol>
+ *
+ * <h2>scope 隔离机制</h2>
+ * <p>每个 NacosNamingService 实例有唯一的 eventScope（UUID），
+ * 事件通过 scope() 方法返回此值，确保事件只被同一 NamingService 实例的
+ * Notifier 消费，避免跨实例污染。</p>
  *
  * @author horizonzy
  * @since 1.4.1
@@ -31,16 +51,22 @@ public class InstancesChangeEvent extends Event {
     
     private static final long serialVersionUID = -8823087028212249603L;
     
+    /** 事件所属的 NamingService 实例 scope（UUID），用于隔离不同实例。 */
     private final String eventScope;
     
+    /** 服务名。 */
     private final String serviceName;
     
+    /** 组名。 */
     private final String groupName;
     
+    /** 集群名。 */
     private final String clusters;
     
+    /** 当前完整实例列表（非仅 diff）。 */
     private final List<Instance> hosts;
     
+    /** 差异详情（新增/移除/修改），由 InstancesDiffer 计算。 */
     private InstancesDiff instancesDiff;
     
     public InstancesChangeEvent(String eventScope, String serviceName, String groupName,

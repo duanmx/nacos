@@ -19,7 +19,19 @@ package com.alibaba.nacos.client.ai.utils;
 import com.alibaba.nacos.common.utils.StringUtils;
 
 /**
- * Nacos AI module cache key utils.
+ * AI 模块缓存键工具类 —— 统一生成各类 AI 资源的缓存键（cache key），
+ * 用于 {@link com.alibaba.nacos.client.ai.event.AiChangeNotifier} 中的
+ * 监听器路由和 {@code CacheHolder} 中的缓存索引。
+ *
+ * <h2>键格式约定</h2>
+ * <ul>
+ *   <li>版本化资源（MCP Server / AgentCard）：{@code ${name}::${version}}，
+ *       未指定版本时默认为 {@code latest}</li>
+ *   <li>多维度资源（Prompt / Skill）：优先 label，其次 version，最后 latest；
+ *       格式为 {@code ${name}::label:${label}} 或
+ *       {@code ${name}::version:${version}} 或 {@code ${name}::latest}</li>
+ *   <li>简单资源（AgentSpec）：直接使用 {@code ${name}}</li>
+ * </ul>
  *
  * @author xiweng.yy
  */

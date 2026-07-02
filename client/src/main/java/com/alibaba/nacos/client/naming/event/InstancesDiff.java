@@ -24,16 +24,26 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * The differences in instances compared to the last callback.
+ * 实例差异结果 —— 承载新增/移除/修改三类实例变更。
+ *
+ * <p>由 {@link com.alibaba.nacos.client.naming.cache.InstancesDiffer#doDiff
+ * InstancesDiffer.doDiff()} 计算生成，作为 {@link InstancesChangeEvent} 的
+ * 差异详情字段传递给用户侧 {@link com.alibaba.nacos.api.naming.listener.EventListener}。</p>
+ *
+ * <p>三个列表互斥（同一个 ip:port 不会同时出现在两个列表中），
+ * 通过 {@link #hasDifferent()} 快速判断是否有任何变化。</p>
  *
  * @author lideyou
  */
 public class InstancesDiff {
     
+    /** 新增实例列表（旧缓存无、新缓存有）。 */
     private final List<Instance> addedInstances = new ArrayList<>();
     
+    /** 移除实例列表（旧缓存有、新缓存无）。 */
     private final List<Instance> removedInstances = new ArrayList<>();
     
+    /** 修改实例列表（ip:port 相同但其他属性变化，如 weight/healthy）。 */
     private final List<Instance> modifiedInstances = new ArrayList<>();
     
     public InstancesDiff() {
@@ -80,36 +90,33 @@ public class InstancesDiff {
     }
     
     /**
-     * Check if any instances have changed.
+     * 判断是否有任何实例变化（新增 or 移除 or 修改）。
      *
-     * @return true if there are instances that have changed
+     * <p>调用方：ServiceInfoHolder.processServiceInfo() —— 有变化时才发布事件，
+     * 无变化则跳过，避免无效通知。</p>
+     *
+     * @return true 有变化，false 无变化
      */
     public boolean hasDifferent() {
         return isAdded() || isRemoved() || isModified();
     }
     
     /**
-     * Check if any instances have been added.
-     *
-     * @return true if there are instances that have been added.
+     * 判断是否有新增实例。
      */
     public boolean isAdded() {
         return CollectionUtils.isNotEmpty(this.addedInstances);
     }
     
     /**
-     * Check if any instances have been added.
-     *
-     * @return true if there are instances that have been added.
+     * 判断是否有移除实例。
      */
     public boolean isRemoved() {
         return CollectionUtils.isNotEmpty(this.removedInstances);
     }
     
     /**
-     * Check if any instances have been added.
-     *
-     * @return true if there are instances that have been added.
+     * 判断是否有修改实例。
      */
     public boolean isModified() {
         return CollectionUtils.isNotEmpty(this.modifiedInstances);

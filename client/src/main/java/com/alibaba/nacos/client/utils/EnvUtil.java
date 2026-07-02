@@ -24,7 +24,23 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * env util.
+ * 环境标识工具类 —— 管理客户端的自识别标签（self-identification tags），
+ * 用于多环境路由、同机房优先调用等场景。
+ *
+ * <h2>核心职责</h2>
+ * <p>从服务端返回的 HTTP Response Header 中解析三类环境标签：
+ * <ul>
+ *   <li><b>Amory Tag</b> — 单元化路由标签（如 RZone 信息）</li>
+ *   <li><b>VipServer Tag</b> — VIP 服务器标签</li>
+ *   <li><b>Location Tag</b> — 地理位置标签（如同机房标识）</li>
+ * </ul>
+ * 标签变更时通过 LOGGER.warn 输出变更日志。</p>
+ *
+ * <h2>数据来源</h2>
+ * <p>通过 {@link #setSelfEnv(Map)} 从 HTTP Response Header 注入。
+ * 典型调用链：NamingHttpClientProxy / ConfigTransportClient 在收到
+ * 服务端响应后，解析 Header 中的 {@code Amory-Tag}、
+ * {@code Vipserver-Tag}、{@code Location-Tag} 字段。</p>
  *
  * @author Nacos
  */

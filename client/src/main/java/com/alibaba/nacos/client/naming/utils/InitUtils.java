@@ -30,7 +30,16 @@ import com.alibaba.nacos.common.json.JsonAdapterLogUtils;
 import com.alibaba.nacos.common.utils.StringUtils;
 
 /**
- * Init utils.
+ * Naming 客户端初始化工具类 —— 提供 namespace 解析、webContext 初始化、序列化预注册等功能。
+ *
+ * <h2>核心方法</h2>
+ * <ul>
+ *   <li><b>initNamespaceForNaming</b> —— 从多种配置源中解析 namespace（优先级：
+ *       cloud namespace → JVM namespace → properties namespace → 默认 public）</li>
+ *   <li><b>initWebRootContext</b> —— 初始化 HTTP API 的基础 URL 路径</li>
+ *   <li><b>initSerialization</b> —— 预加载 SelectorFactory 子类型，
+ *       解决 classloader 延迟加载导致的 Jackson 反序列化失败问题</li>
+ * </ul>
  *
  * @author liaochuntao
  * @author deshao

@@ -22,7 +22,19 @@ import com.alibaba.nacos.common.utils.StringUtils;
 import org.slf4j.Logger;
 
 /**
- * manage param tool.
+ * 客户端参数工具类 —— 集中管理 HTTP 客户端连接超时、读取超时和
+ * 每任务配置大小等运行时参数，从系统属性或环境变量读取，支持运行时修改。
+ *
+ * <h2>管理的参数</h2>
+ * <ul>
+ *   <li><b>connectTimeout</b>（默认 1000ms）— HTTP 连接超时</li>
+ *   <li><b>readTimeout</b>（默认 3000ms）— HTTP 读取超时</li>
+ *   <li><b>perTaskConfigSize</b>（默认 3000）— 单次任务拉取的配置数量上限</li>
+ * </ul>
+ *
+ * <h2>envName 截断</h2>
+ * <p>{@link #simplyEnvNameIfOverLimit(String)} 用于处理超长环境名：
+ * 超过 50 字符时截取前 50 位并拼接 MD5 值，确保唯一性且不超长。</p>
  *
  * @author nacos
  */

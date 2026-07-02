@@ -22,7 +22,14 @@ import org.slf4j.Logger;
 import static org.slf4j.LoggerFactory.getLogger;
 
 /**
- * Log utils.
+ * 日志工具类 —— 负责在类加载时初始化 Nacos 客户端的日志配置，
+ * 并提供便捷的 {@link Logger} 获取方法。
+ *
+ * <h2>初始化时机</h2>
+ * <p>静态块中调用 {@link NacosLogging#loadConfiguration()} 加载日志配置，
+ * 确保在任何客户端组件使用 Logger 之前日志系统已就绪。</p>
+ *
+ * <p>同时预创建 {@code NAMING_LOGGER} —— 一个专门用于 Naming 模块的 Logger 实例。</p>
  *
  * @author <a href="mailto:huangxiaoyu1018@gmail.com">hxy1991</a>
  * @since 0.9.0

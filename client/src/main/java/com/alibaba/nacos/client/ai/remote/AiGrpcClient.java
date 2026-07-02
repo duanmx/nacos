@@ -91,7 +91,31 @@ import java.util.concurrent.TimeUnit;
 import static com.alibaba.nacos.client.constant.Constants.Security.SECURITY_INFO_REFRESH_INTERVAL_MILLS;
 
 /**
- * Nacos AI GRPC protocol client.
+ * Nacos AI gRPC 客户端 —— 基于 gRPC 双向流实现 AI 资源的注册、查询、
+ * 端点管理和订阅功能。
+ *
+ * <h2>核心职责</h2>
+ * <p>实现 {@link AiClientProxy} 接口的 gRPC 传输方案：
+ * <ul>
+ *   <li><b>MCP Server</b>：发布（release）、查询（query）、端点注册/注销、
+ *       订阅/取消订阅</li>
+ *   <li><b>Agent Card</b>：发布（支持 A2A 1.0 兼容格式降级）、查询、
+ *       端点注册（单/批量）/注销、订阅/取消订阅</li>
+ *   <li><b>Prompt 查询</b>：通过 gRPC 查询 Prompt 最新/指定版本</li>
+ *   <li><b>Redo 机制</b>：端点注册/注销操作缓存到 {@link AiGrpcRedoService}，
+ *       断线重连后自动重做</li>
+ *   <li><b>能力协商</b>：每次操作前通过
+ *       {@code checkServerAbilityOrThrow()} 验证服务端是否支持对应功能</li>
+ * </ul>
+ *
+ * <h2>传输模式</h2>
+ * <p>默认使用 gRPC。当配置 {@code AI_TRANSPORT_MODE=HTTP} 时，
+ * {@link NacosAiService} 会选择 {@link AiHttpClientProxy} 作为主代理。</p>
+ *
+ * <h2>Prompt/AgentSpec/Skill 的限制</h2>
+ * <p>gRPC 通道不支持 Skill 和 AgentSpec 的查询（仅 HTTP 支持），
+ * 这些方法会抛出 {@link NacosException#SERVER_NOT_IMPLEMENTED}。
+ * 对应功能由 {@link AiHttpClientProxy} 实现。</p>
  *
  * @author xiweng.yy
  */

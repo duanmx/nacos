@@ -35,7 +35,43 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Abstract redo service.
+ * 抽象重做服务 —— 在服务端断连时管理注册/注销操作的重试。
+ *
+ * <h2>核心职责</h2>
+ * <p>作为 ConnectionEventListener 监听 gRPC 连接状态变化：
+ * <ul>
+ *   <li><b>onDisConnect</b> —— 连接断开时，将所有 RedoData 标记为 registered=false，
+ *       启动 RedoScheduledTask 周期遍历 redoDataMap，通过 getRedoType() 判断是否需要重做</li>
+ *   <li><b>onConnected</b> —— 连接恢复时，标记 connected=true，RedoScheduledTask 恢复执行重做</li>
+ *   <li><b>缓存管理</b> —— 提供 cachedRedoData/removeRedoData/dataRegistered/dataDeregister 等方法，
+ *       管理 Class → key → RedoData 的三级映射</li>
+ * </ul>
+ * </p>
+ *
+ * <h2>数据流转</h2>
+ * <pre>{@code
+ *   注册操作：
+ *   NamingGrpcClientProxy.registerInstance()
+ *     → grpcClient.request(InstanceRequest)  // 发送 gRPC 请求
+ *       ├─ 成功 → redoService.dataRegistered(key, clazz)
+ *       └─ 失败 → 不标记 registered，等待 RedoScheduledTask 重试
+ *
+ *   断连重做：
+ *   gRPC 连接断开 → onDisConnect() → 标记所有 RedoData.registered = false
+ *     → RedoScheduledTask
+ *    .run()
+ *       → findRedoData(clazz) → 过滤 isNeedRedo()=true 的数据
+ *         → getRedoType() == REGISTER → redoRegister()
+ *         → getRedoType() == UNREGISTER → redoDeregister()
+ *         → getRedoType() == REMOVE → removeRedoData(key, clazz)
+ * }</pre>
+ *
+ * <h2>子类</h2>
+ * <ul>
+ *   <li>NamingGrpcRedoService —— Naming 模块重做服务</li>
+ *   <li>ConfigGrpcRedoService —— Config 模块重做服务</li>
+ *   <li>AiGrpcRedoService —— AI 模块重做服务</li>
+ * </ul>
  *
  * @author xiweng.yy
  */
@@ -45,14 +81,31 @@ public abstract class AbstractRedoService implements ConnectionEventListener, Cl
     
     private final Logger logger;
     
+    /**
+     * 定时重做线程池 —— 按 redoDelayTime 周期执行 buildRedoTask()。
+     */
     private final ScheduledExecutorService redoExecutor;
     
+    /**
+     * 重做数据的三级映射：数据 Class → key → RedoData。
+     * <p>外层 key 是 RedoData 泛型的实际类型（如 Instance.class），
+     * 内层 key 是业务的唯一标识（如 serviceKey）。</p>
+     */
     private final Map<Class<?>, Map<String, RedoData<?>>> redoDataMap;
     
+    /**
+     * 重做线程数，默认 1。
+     */
     private int redoThreadCount;
     
+    /**
+     * 重做间隔时间（毫秒），默认 3000ms。
+     */
     private long redoDelayTime;
     
+    /**
+     * gRPC 连接状态 —— true 表示已连接，RedoScheduledTask 仅在此状态下执行重做。
+     */
     private volatile boolean connected = false;
     
     protected AbstractRedoService(Logger logger, NacosClientProperties properties, String module) {
