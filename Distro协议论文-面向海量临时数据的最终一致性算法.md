@@ -121,13 +121,17 @@ Distro 在工程上分为两层：位于 `core` 模块的**框架层**（`com.al
 
 ## 4. 责任分片
 
-> 核心命题：一致性哈希让每份数据只有一个权威节点，从源头消除写冲突。
+> 核心命题：责任判定让每份数据只有一个权威节点，从源头消除写冲突——而「谁负责」的判定方式因客户端接入通道而异：gRPC 长连接靠连接的物理落点，遗留 IP:port 才靠一致性哈希。
 
 Distro 的一切都建立在「责任判定」之上——即回答「哪些数据该由本节点主动同步出去」。判定入口 [`isInvalidClient`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/consistency/ephemeral/distro/v2/DistroClientDataProcessor.java#L137-L141) 给出三个「无效」条件：数据为空、数据非临时（应走 Raft）、或本节点并不负责它。只有全部通过，本节点才会主动扩散这份数据。
 
-「本节点是否负责」最终由 [`DistroMapper.responsible`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L78-L99) 判定，其思路是朴素的一致性哈希：先对数据的责任标签（v2 中是 Client 的 `ip:port`）取哈希，再对存活节点数取模得到一个目标下标；若该下标落在本节点在列表中的位置区间内，则本节点负责。单机模式或哈希未就绪等边界会短路为「负责」或「暂不负责」。哈希函数本身极为简单（对 `hashCode` 取绝对值后取模，见 [L125-L127](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L125-L127)），不追求密码学强度，只求把数据大致均匀地摊到各节点。
+`isInvalidClient` 中「本节点并不负责它」这一条，落到 [`isResponsibleClient`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/v2/client/manager/ClientManagerDelegate.java#L97-L100) 上，**按客户端类型分派到不同实现**——这正是「谁负责」判定的关键分叉。必须强调：**一致性哈希只是其中一条路径，并非 v2 的主流做法**。
 
-这套判定要正确，依赖一个关键不变式：**所有节点必须对节点列表持有完全一致且顺序相同的视图**，否则同一份数据会被多个节点同时认领。源码用两处保证这一点：成员变更时对列表执行 `Collections.sort` 排序（[`DistroMapper.onEvent`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L129-L142)），并在字段注释中明确要求「所有节点的列表顺序必须一致」。这个不变式是全篇安全性论证的基石（第 9 节）。
+**gRPC 长连接客户端（`ConnectionBasedClient`，v2/v3 的主流接入方式）**：责任判定并不哈希，而取决于连接的物理落点。[`ConnectionBasedClientManager.isResponsibleClient`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/v2/client/manager/impl/ConnectionBasedClientManager.java#L135-L139) 直接返回该 Client 的 `isNative` 标志。首次由本地连接建立的 Client 经 [`newClient`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/v2/client/factory/impl/ConnectionBasedClientFactory.java#L38-L45) 创建，`isNative` 置真；经 Distro 从其他节点同步而来的副本则经 [`newSyncedClient`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/v2/client/factory/impl/ConnectionBasedClientFactory.java#L47-L54) 创建，`isNative` 置假。于是「实例的 gRPC 连接落在哪个节点，哪个节点就是它唯一的权威」，无需任何哈希或协商——长连接本身天然绑定于单一节点，这个物理事实直接充当了责任划分。
+
+**遗留 IP:port 客户端（`EphemeralIpPortClient`，经 HTTP 接入）**：没有长连接可依凭，责任才由 [`DistroMapper.responsible`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L78-L99) 用一致性哈希判定——[`EphemeralIpPortClientManager.isResponsibleClient`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/v2/client/manager/impl/EphemeralIpPortClientManager.java#L121-L127) 对该 Client 的责任标签（其 `ip:port`，即 clientId 中 `#` 之前的部分，见 [`getResponsibleTagFromId`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/v2/client/impl/IpPortBasedClient.java#L64-L67)）取哈希，再对存活节点数取模得到目标下标；若下标落在本节点于列表中的位置区间内，则本节点负责。单机模式或哈希未就绪等边界会短路为「负责」或「暂不负责」。哈希函数本身极简（对 `hashCode` 取绝对值后取模，见 [L125-L127](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L125-L127)），只求把数据大致均匀地摊到各节点。
+
+**上述哈希路径**要正确，依赖一个关键不变式：**所有节点必须对节点列表持有完全一致且顺序相同的视图**，否则同一份数据会被多个节点同时认领。源码用两处保证这一点：成员变更时对列表执行 `Collections.sort` 排序（[`DistroMapper.onEvent`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L129-L142)），并在字段注释中明确要求「所有节点的列表顺序必须一致」。（gRPC 的连接落点判定不依赖此不变式——责任直接由连接归属决定。）这个不变式是哈希路径下安全性论证的基石（第 9 节）。
 
 责任制的意义在于：每份数据只有一个权威源，写扩散与反熵校验都由它单向发起，其他节点只被动接收——这与 Raft 用单一 Leader 避免冲突异曲同工。区别在于，Raft 是**集群级**的单 Leader，而 Distro 是**数据分片级**的多权威：每个数据分片各有自己的权威节点，因而没有全局选举，也没有单点写入瓶颈。
 
@@ -181,7 +185,7 @@ Distro 的一切都建立在「责任判定」之上——即回答「哪些数�
 
 ## 8. 成员变更
 
-Raft 用「联合共识」来安全地变更成员。Distro 的成员变更处理要简单得多，因为它不追求线性一致，只需保证责任划分最终收敛。
+Raft 用「联合共识」来安全地变更成员。Distro 的成员变更处理要简单得多，因为它不追求线性一致，只需保证责任划分最终收敛。（本节以 IP:port 的一致性哈希路径为例讨论「责任转移」；对 gRPC 连接客户端，责任不由哈希决定，而是随连接的断连与重连自然迁移到新的落点节点，机制不同但同样无需显式搬迁。）
 
 当集群成员变化时，成员管理器发布成员变更事件，[`DistroMapper.onEvent`](file:///Users/mmhm/IdeaProjects/nacos/naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java#L129-L142) 据此更新本地节点列表：只纳入 UP 与 SUSPICIOUS 状态的节点，并**排序**以保证各节点视图一致（第 4 节的不变式）。
 
@@ -239,10 +243,10 @@ Raft 用「联合共识」来安全地变更成员。Distro 的成员变更处�
 |------|------|--------|
 | 一致性模型 | 线性一致（CP） | 最终一致（AP） |
 | 目标场景 | 关键元数据，需强一致 | 海量临时实例、心跳、可重建 |
-| 角色结构 | 集群级单一 Leader | 数据分片级多权威（一致性哈希） |
+| 角色结构 | 集群级单一 Leader | 数据分片级多权威（gRPC 连接落点 / IP:port 一致性哈希） |
 | 写路径 | 追加日志→多数派确认→提交 | 权威节点异步扩散→立即返回 |
 | 写延迟 | 正比于多数派往返 | 正比于本地处理（扩散异步） |
-| 冲突避免 | 单 Leader + 任期 + 日志匹配 | 责任唯一性（哈希分片） |
+| 冲突避免 | 单 Leader + 任期 + 日志匹配 | 责任唯一性（连接落点 / 哈希分片） |
 | 复制粒度 | 日志条目（增量、有序） | 全量数据（覆盖式） |
 | 一致性校验 | 日志索引 + 任期 | revision 指纹（内容哈希） |
 | 故障恢复 | 选举新 Leader + 日志补齐 | 责任重分配 + 反熵补发 |
@@ -250,21 +254,21 @@ Raft 用「联合共识」来安全地变更成员。Distro 的成员变更处�
 | 新节点引导 | Leader 发快照 + 日志 | 从任一节点拉全量快照 |
 | 分区期间可写性 | 仅多数派侧可写 | 各侧均可写（牺牲一致性） |
 
-两者共享同一种设计哲学——以可理解性为纲，把复杂问题分解为独立子问题。Raft 分为领导选举、日志复制与安全性；Distro 分为责任分片、写扩散与反熵校验。差异全部源于目标一致性等级的不同：因为放弃了线性一致，Distro 得以用一致性哈希替代选举、用覆盖式全量替代有序日志、用指纹校验替代日志匹配，整体实现远比 Raft 轻量。
+两者共享同一种设计哲学——以可理解性为纲，把复杂问题分解为独立子问题。Raft 分为领导选举、日志复制与安全性；Distro 分为责任分片、写扩散与反熵校验。差异全部源于目标一致性等级的不同：因为放弃了线性一致，Distro 得以用责任分片（gRPC 连接落点为主、IP:port 一致性哈希为辅）替代选举、用覆盖式全量替代有序日志、用指纹校验替代日志匹配，整体实现远比 Raft 轻量。
 
-若要找一个更贴近的参照，Distro 更像 Amazon Dynamo：一致性哈希做分片、反熵做修复、最终一致做目标。不同的是，Dynamo 需要处理并发写冲突（如购物车合并），而服务发现数据有天然的「唯一权威源」，因此 Distro 省去了冲突合并；它的 `revision` 指纹相当于 Dynamo 的 Merkle 树，只是粒度更粗——每个 Client 一个整数。
+若要找一个更贴近的参照，Distro 更像 Amazon Dynamo：以责任分片、反熵修复、最终一致为骨架（其 IP:port 路径的一致性哈希分片与 Dynamo 尤为神似，而 gRPC 主流则改用连接落点分片）。不同的是，Dynamo 需要处理并发写冲突（如购物车合并），而服务发现数据有天然的「唯一权威源」，因此 Distro 省去了冲突合并；它的 `revision` 指纹相当于 Dynamo 的 Merkle 树，只是粒度更粗——每个 Client 一个整数。
 
 ---
 
 ## 13. 局限
 
-Distro 的取舍带来了几处必须正视的局限。**读陈旧性**：在扩散延迟与网络传播窗口内，非权威节点可能返回略旧的实例列表；这对服务发现可接受，但对分布式锁、配置等强一致场景并不适用，Nacos 因此为它们保留了 Raft。**反熵的规模成本**：校验虽轻，但周期性地覆盖「全部负责数据 × 全部其他节点」，在超大规模集群下其 RPC 数量随两者乘积增长，仍有可观的固定开销。**哈希倾斜**：责任哈希基于地址字符串的 `hashCode`，理论上分布可能不均，源码中未见虚拟节点一类的均衡措施。**成员视图窗口**：变更传播期内的短暂双责任或无责任虽不破坏最终一致，却会带来短时的冗余流量或读空窗。**重试无保证**：写扩散重试既无上限也不保证成功，真正的兜底始终是反熵——理解这一点，对排查「数据短暂不一致」类问题至关重要。
+Distro 的取舍带来了几处必须正视的局限。**读陈旧性**：在扩散延迟与网络传播窗口内，非权威节点可能返回略旧的实例列表；这对服务发现可接受，但对分布式锁、配置等强一致场景并不适用，Nacos 因此为它们保留了 Raft。**反熵的规模成本**：校验虽轻，但周期性地覆盖「全部负责数据 × 全部其他节点」，在超大规模集群下其 RPC 数量随两者乘积增长，仍有可观的固定开销。**哈希倾斜**（仅 IP:port 通道）：该路径的责任哈希基于地址字符串的 `hashCode`，理论上分布可能不均，源码中未见虚拟节点一类的均衡措施；gRPC 主流通道按连接落点定责，不存在哈希倾斜，但可能因客户端连接分布不均导致节点负载倾斜。**成员视图窗口**：变更传播期内的短暂双责任或无责任虽不破坏最终一致，却会带来短时的冗余流量或读空窗。**重试无保证**：写扩散重试既无上限也不保证成功，真正的兜底始终是反熵——理解这一点，对排查「数据短暂不一致」类问题至关重要。
 
 ---
 
 ## 14. 结论
 
-Distro 是一个为服务发现量身定制的最终一致性协议。它与 Raft 共享「可理解性优先、问题分解」的方法论，但因目标从 CP 降到 AP，得以用三个极简子问题——责任分片、写扩散、反熵校验——替代 Raft 的选举与日志复制。责任分片以一致性哈希赋予每份数据唯一权威，从源头消除冲突；写扩散以异步复制换取低写延迟，并让每个副本都「可读可推送」而非冷备；反熵校验以「校验轻、修复重」的指纹机制兜底最终一致；成员变更则靠有序列表与哈希自愈，免去了 Raft 式的联合共识。
+Distro 是一个为服务发现量身定制的最终一致性协议。它与 Raft 共享「可理解性优先、问题分解」的方法论，但因目标从 CP 降到 AP，得以用三个极简子问题——责任分片、写扩散、反熵校验——替代 Raft 的选举与日志复制。责任分片赋予每份数据唯一权威（gRPC 主流靠连接落点、遗留 IP:port 靠一致性哈希），从源头消除冲突；写扩散以异步复制换取低写延迟，并让每个副本都「可读可推送」而非冷备；反熵校验以「校验轻、修复重」的指纹机制兜底最终一致；成员变更则靠有序列表与哈希自愈，免去了 Raft 式的联合共识。
 
 Distro 的价值不在于它比 Raft「更先进」，而在于它示范了一个朴素而重要的工程判断：**当业务能够容忍最终一致时，主动放弃线性一致，可以换来数量级的实现简化与性能提升**。用正确的一致性模型去解决正确的问题，本身就是一种优雅。
 
